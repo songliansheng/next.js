@@ -798,7 +798,19 @@ async function renderToHTMLOrFlightImpl(
   // response directly.
   const onHeadersFinished = new DetachedPromise<void>()
 
-  const renderToStream = getTracer().wrap(
+  type RenderToStream = (options: {
+    /**
+     * This option is used to indicate that the page should be rendered as
+     * if it was not found. When it's enabled, instead of rendering the
+     * page component, it renders the not-found segment.
+     *
+     */
+    asNotFound: boolean
+    tree: LoaderTree
+    formState: any
+  }) => Promise<{ ok: boolean; stream: RenderResultResponse }>
+
+  const renderToStream: RenderToStream = getTracer().wrap(
     AppRenderSpan.getBodyResult,
     {
       spanName: `render route (app) ${pagePath}`,
@@ -806,21 +818,7 @@ async function renderToHTMLOrFlightImpl(
         'next.route': pagePath,
       },
     },
-    async ({
-      asNotFound,
-      tree,
-      formState,
-    }: {
-      /**
-       * This option is used to indicate that the page should be rendered as
-       * if it was not found. When it's enabled, instead of rendering the
-       * page component, it renders the not-found segment.
-       *
-       */
-      asNotFound: boolean
-      tree: LoaderTree
-      formState: any
-    }) => {
+    async ({ asNotFound, tree, formState }) => {
       const polyfills: JSX.IntrinsicElements['script'][] =
         buildManifest.polyfillFiles
           .filter(
@@ -940,7 +938,7 @@ async function renderToHTMLOrFlightImpl(
 
           // We don't need to "continue" this stream now as it's continued when
           // we resume the stream.
-          return stream
+          return { stream, ok: true }
         }
 
         const options: ContinueStreamOptions = {
@@ -960,10 +958,12 @@ async function renderToHTMLOrFlightImpl(
         }
 
         if (renderOpts.postponed) {
-          return await continuePostponedFizzStream(stream, options)
+          stream = await continuePostponedFizzStream(stream, options)
+        } else {
+          stream = await continueFizzStream(stream, options)
         }
 
-        return await continueFizzStream(stream, options)
+        return { stream, ok: true }
       } catch (err: any) {
         if (
           err.code === 'NEXT_STATIC_GEN_BAILOUT' ||
@@ -1071,14 +1071,19 @@ async function renderToHTMLOrFlightImpl(
             },
           })
 
-          return await continueFizzStream(fizzStream, {
-            inlinedDataStream: errorInlinedDataTransformStream.readable,
-            isStaticGeneration,
-            getServerInsertedHTML: () => getServerInsertedHTML([]),
-            serverInsertedHTMLToHead: true,
-            validateRootLayout,
-            suffix: undefined,
-          })
+          return {
+            // We're returning `false` here because we rendered the error page
+            // and not the page itself.
+            ok: false,
+            stream: await continueFizzStream(fizzStream, {
+              inlinedDataStream: errorInlinedDataTransformStream.readable,
+              isStaticGeneration,
+              getServerInsertedHTML: () => getServerInsertedHTML([]),
+              serverInsertedHTMLToHead: true,
+              validateRootLayout,
+              suffix: undefined,
+            }),
+          }
         } catch (finalErr: any) {
           if (
             process.env.NODE_ENV === 'development' &&
@@ -1111,14 +1116,13 @@ async function renderToHTMLOrFlightImpl(
   if (actionRequestResult) {
     if (actionRequestResult.type === 'not-found') {
       const notFoundLoaderTree = createNotFoundLoaderTree(loaderTree)
-      return new RenderResult(
-        await renderToStream({
-          asNotFound: true,
-          tree: notFoundLoaderTree,
-          formState,
-        }),
-        { metadata }
-      )
+      const response = await renderToStream({
+        asNotFound: true,
+        tree: notFoundLoaderTree,
+        formState,
+      })
+
+      return new RenderResult(response.stream, { metadata })
     } else if (actionRequestResult.type === 'done') {
       if (actionRequestResult.result) {
         actionRequestResult.result.assignMetadata(metadata)
@@ -1133,7 +1137,7 @@ async function renderToHTMLOrFlightImpl(
     metadata,
   }
 
-  let response: RenderResultResponse = await renderToStream({
+  let response = await renderToStream({
     asNotFound: isNotFoundPath,
     tree: loaderTree,
     formState,
@@ -1153,7 +1157,7 @@ async function renderToHTMLOrFlightImpl(
   }
 
   // Create the new render result for the response.
-  const result = new RenderResult(response, options)
+  const result = new RenderResult(response.stream, options)
 
   // If we aren't performing static generation, we can return the result now.
   if (!isStaticGeneration) {
@@ -1162,7 +1166,7 @@ async function renderToHTMLOrFlightImpl(
 
   // If this is static generation, we should read this in now rather than
   // sending it back to be sent to the client.
-  response = await result.toUnchunkedString(true)
+  response.stream = await result.toUnchunkedString(true)
 
   // Timeout after 1.5 seconds for the headers to write. If it takes
   // longer than this it's more likely that the stream has stalled and
@@ -1189,6 +1193,8 @@ async function renderToHTMLOrFlightImpl(
     renderOpts.experimental.ppr &&
     // and a call to `postpone` happened
     staticGenerationStore.postponeWasTriggered &&
+    // and we didn't encounter any errors during the build
+    response.ok &&
     // but there's no postpone state
     !metadata.postponed
   ) {
@@ -1252,7 +1258,7 @@ async function renderToHTMLOrFlightImpl(
     }
   }
 
-  return new RenderResult(response, options)
+  return new RenderResult(response.stream, options)
 }
 
 export type AppPageRender = (
