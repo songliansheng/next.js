@@ -133,7 +133,6 @@ import { generateRandomActionKeyRaw } from '../../app-render/action-encryption-u
 import { bold, green, red } from '../../../lib/picocolors'
 import { writeFileAtomic } from '../../../lib/fs/write-atomic'
 import { PAGE_TYPES } from '../../../lib/page-types'
-import { formaFrameSourceFile } from '../../../client/components/react-dev-overlay/internal/helpers/stack-frame'
 
 const wsServer = new ws.Server({ noServer: true })
 
