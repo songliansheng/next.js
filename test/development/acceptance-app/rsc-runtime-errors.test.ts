@@ -4,6 +4,7 @@ import { FileRef, createNextDescribe } from 'e2e-utils'
 import {
   check,
   getRedboxDescription,
+  getRedboxSource,
   hasRedbox,
   shouldRunTurboDevTest,
 } from 'next-test-utils'
@@ -75,6 +76,27 @@ createNextDescribe(
       expect(errorDescription).toContain(
         `Error: Invariant: cookies() expects to have requestAsyncStorage, none available.`
       )
+    })
+
+    it('should show the userland code error trace when fetch failed error occurred', async () => {
+      await next.patchFile(
+        'app/server/page.js',
+        outdent`
+        export default async function Page() {
+          await fetch('http://locahost:3000/xxxx')
+          return 'page'
+        }
+        `
+      )
+      const browser = await next.browser('/server')
+      await check(
+        async () => ((await hasRedbox(browser, true)) ? 'success' : 'fail'),
+        /success/
+      )
+      const source = await getRedboxSource(browser)
+      // Can show the original source code
+      expect(source).toContain('app/server/page.js')
+      expect(source).toContain(`> 2 | await fetch('http://locahost:3000/xxxx')`)
     })
   }
 )
