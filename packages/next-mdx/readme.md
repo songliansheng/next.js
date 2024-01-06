@@ -4,7 +4,7 @@ Use [MDX](https://github.com/mdx-js/mdx) with [Next.js](https://github.com/verce
 
 ## Installation
 
-For usage with the `app` directory see the section below.
+For usage with the `pages` directory see the section below.
 
 ```
 npm install @next/mdx @mdx-js/loader @mdx-js/react
